@@ -1,0 +1,675 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_VitaStore_Onboarding_ToBe" targetNamespace="https://vitastore.example/bpmn/onboarding" exporter="VitaStore architecture example" exporterVersion="1.0">
+  <message id="M_Packet" name="Файл номенклатуры магазина"/>
+  <message id="M_Correction" name="Запрос на исправление файла"/>
+  <message id="M_AiReq" name="Запрос сопоставления"/>
+  <message id="M_AiResult" name="Результат ИИ-мэппинга"/>
+  <message id="M_HumanReq" name="Запрос ручной верификации"/>
+  <message id="M_Reviewed" name="Верифицированные позиции"/>
+  <message id="M_ErpReq" name="Утверждённый пакет в ERP"/>
+  <message id="M_ErpResult" name="Результат загрузки ERP"/>
+  <message id="M_Pos" name="Тестовый пакет POS"/>
+  <message id="M_PilotResult" name="Акт приёмки магазина"/>
+  <collaboration id="Collaboration_Onboarding">
+    <participant id="Participant_Store" name="Магазин — сотрудники / ИТ" processRef="Process_Store"/>
+    <participant id="Participant_Orch" name="Сервис онбординга — автоматизация" processRef="Process_Orch"/>
+    <participant id="Participant_AI" name="ИИ-сервис сопоставления товаров" processRef="Process_AI"/>
+    <participant id="Participant_HQ" name="HQ — товаровед (Human-in-the-loop)" processRef="Process_HQ"/>
+    <participant id="Participant_ERP" name="ERP / Master Data Management" processRef="Process_ERP"/>
+    <messageFlow id="Msg_File" name="CSV / API: позиции, GTIN, цены" sourceRef="S_Send" targetRef="O_Start"/>
+    <messageFlow id="Msg_Resent" name="новая версия пакета" sourceRef="S_Resend" targetRef="O_Start"/>
+    <messageFlow id="Msg_Correct" name="ошибки формата" sourceRef="O_Reject" targetRef="S_Restart"/>
+    <messageFlow id="Msg_AiRequest" name="неразрешённые SKU + справочник" sourceRef="O_AIReq" targetRef="AI_Start"/>
+    <messageFlow id="Msg_AiAnswer" name="top-k + confidence + признаки" sourceRef="AI_Send" targetRef="O_AIReply"/>
+    <messageFlow id="Msg_ReviewTask" name="позиции ниже порога / конфликты" sourceRef="O_ReviewReq" targetRef="H_Start"/>
+    <messageFlow id="Msg_ReviewAnswer" name="проверенный mapping + аудит" sourceRef="H_Approve" targetRef="O_ReviewWait"/>
+    <messageFlow id="Msg_ERP" name="версионированный mapping" sourceRef="O_ERPReq" targetRef="E_Start"/>
+    <messageFlow id="Msg_ERP_OK" name="статус / versionId / ошибки" sourceRef="E_OK" targetRef="O_ERPWait"/>
+    <messageFlow id="Msg_ERP_NOK" name="статус rejection" sourceRef="E_NOK" targetRef="O_ERPWait"/>
+    <messageFlow id="Msg_ToStore" name="тестовый POS-пакет + версия" sourceRef="O_PosReq" targetRef="S_TestStart"/>
+    <messageFlow id="Msg_StoreResult" name="акт приёмки OK / NOK" sourceRef="S_Result" targetRef="O_PosWait"/>
+  </collaboration>
+  <process id="Process_Store" name="Магазин" isExecutable="false">
+    <startEvent id="S_Start" name="Новый магазин приобретён"/>
+    <userTask id="S_Export" name="Выгрузить SKU, GTIN, цены и остатки"/>
+    <sendTask id="S_Send" name="Передать пакет через портал / API"/>
+    <endEvent id="S_End" name="Файл передан"/>
+    <startEvent id="S_Restart" name="Запрос исправления">
+      <messageEventDefinition id="MsgDef_S_Restart" messageRef="M_Correction"/>
+    </startEvent>
+    <userTask id="S_Fix" name="Исправить формат / повторить экспорт"/>
+    <sendTask id="S_Resend" name="Отправить новую версию"/>
+    <endEvent id="S_End2" name="Отправлено повторно"/>
+    <startEvent id="S_TestStart" name="Пакет POS готов">
+      <messageEventDefinition id="MsgDef_S_TestStart" messageRef="M_Pos"/>
+    </startEvent>
+    <userTask id="S_Test" name="Тест чеков, GTIN, цен и скидок"/>
+    <sendTask id="S_Result" name="Отправить акт OK / NOK"/>
+    <endEvent id="S_End3" name="Приёмка выполнена"/>
+    <sequenceFlow id="Flow_S_Start_S_Export" sourceRef="S_Start" targetRef="S_Export"/>
+    <sequenceFlow id="Flow_S_Export_S_Send" sourceRef="S_Export" targetRef="S_Send"/>
+    <sequenceFlow id="Flow_S_Send_S_End" sourceRef="S_Send" targetRef="S_End"/>
+    <sequenceFlow id="Flow_S_Restart_S_Fix" sourceRef="S_Restart" targetRef="S_Fix"/>
+    <sequenceFlow id="Flow_S_Fix_S_Resend" sourceRef="S_Fix" targetRef="S_Resend"/>
+    <sequenceFlow id="Flow_S_Resend_S_End2" sourceRef="S_Resend" targetRef="S_End2"/>
+    <sequenceFlow id="Flow_S_TestStart_S_Test" sourceRef="S_TestStart" targetRef="S_Test"/>
+    <sequenceFlow id="Flow_S_Test_S_Result" sourceRef="S_Test" targetRef="S_Result"/>
+    <sequenceFlow id="Flow_S_Result_S_End3" sourceRef="S_Result" targetRef="S_End3"/>
+  </process>
+  <process id="Process_Orch" name="Онбординг" isExecutable="false">
+    <dataObject id="Obj_D_Legacy" name="Legacy SKU / GTIN цены / остатки"/>
+    <dataObjectReference id="D_Legacy" name="Legacy SKU / GTIN цены / остатки" dataObjectRef="Obj_D_Legacy"/>
+    <dataObject id="Obj_D_Candidates" name="Кандидаты + score признаки матчинга"/>
+    <dataObjectReference id="D_Candidates" name="Кандидаты + score признаки матчинга" dataObjectRef="Obj_D_Candidates"/>
+    <dataObject id="Obj_D_Approved" name="Утверждённый mapping vN"/>
+    <dataObjectReference id="D_Approved" name="Утверждённый mapping vN" dataObjectRef="Obj_D_Approved"/>
+    <startEvent id="O_Start" name="Пакет поступил">
+      <messageEventDefinition id="MsgDef_O_Start" messageRef="M_Packet"/>
+    </startEvent>
+    <serviceTask id="O_Validate" name="Проверить схему, GTIN, дубли, формат"/>
+    <exclusiveGateway id="O_GWformat" name="Данные корректны?" gatewayDirection="Diverging"/>
+    <sendTask id="O_Reject" name="Вернуть ошибки на исправление"/>
+    <endEvent id="O_FailFmt" name="Ожидание нового файла"/>
+    <serviceTask id="O_Normal" name="Нормализация; точный матч GTIN"/>
+    <sendTask id="O_AIReq" name="Передать unresolved SKU + эталон ERP"/>
+    <intermediateCatchEvent id="O_AIReply" name="Ответ ИИ">
+      <messageEventDefinition id="MsgDef_O_AIReply" messageRef="M_AiResult"/>
+    </intermediateCatchEvent>
+    <serviceTask id="O_Rules" name="Проверить score и бизнес-правила"/>
+    <exclusiveGateway id="O_NeedHuman" name="Есть сомнительные?" gatewayDirection="Diverging"/>
+    <sendTask id="O_ReviewReq" name="Направить спорные SKU товароведу"/>
+    <intermediateCatchEvent id="O_ReviewWait" name="Результат проверки">
+      <messageEventDefinition id="MsgDef_O_ReviewWait" messageRef="M_Reviewed"/>
+    </intermediateCatchEvent>
+    <exclusiveGateway id="O_Merge" name="Все позиции учтены" gatewayDirection="Converging"/>
+    <serviceTask id="O_Quality" name="Контроль полноты, цен, GTIN и версий"/>
+    <exclusiveGateway id="O_QualityGW" name="Контроль пройден?" gatewayDirection="Diverging"/>
+    <endEvent id="O_QualityBad" name="Блокировка / разбор"/>
+    <sendTask id="O_ERPReq" name="Передать утверждённый mapping в ERP"/>
+    <intermediateCatchEvent id="O_ERPWait" name="Ответ ERP">
+      <messageEventDefinition id="MsgDef_O_ERPWait" messageRef="M_ErpResult"/>
+    </intermediateCatchEvent>
+    <exclusiveGateway id="O_ErpGW" name="ERP OK?" gatewayDirection="Diverging"/>
+    <endEvent id="O_ErpFail" name="Ошибка загрузки"/>
+    <sendTask id="O_PosReq" name="Сформировать пакет для тестовой POS"/>
+    <intermediateCatchEvent id="O_PosWait" name="Акт магазина">
+      <messageEventDefinition id="MsgDef_O_PosWait" messageRef="M_PilotResult"/>
+    </intermediateCatchEvent>
+    <exclusiveGateway id="O_PilotGW" name="Тест пройден?" gatewayDirection="Diverging"/>
+    <serviceTask id="O_Activate" name="Активировать релиз POS после приёмки"/>
+    <endEvent id="O_Success" name="Магазин готов к открытию"/>
+    <serviceTask id="O_Rollback" name="Откат / блокировка релиза и разбор"/>
+    <endEvent id="O_FailEnd" name="Открытие отложено"/>
+    <sequenceFlow id="Flow_O_Start_O_Validate" sourceRef="O_Start" targetRef="O_Validate"/>
+    <sequenceFlow id="Flow_O_Validate_O_GWformat" sourceRef="O_Validate" targetRef="O_GWformat"/>
+    <sequenceFlow id="Flow_O_GWformat_O_Normal" name="Да" sourceRef="O_GWformat" targetRef="O_Normal"/>
+    <sequenceFlow id="Flow_O_GWformat_O_Reject" name="Нет" sourceRef="O_GWformat" targetRef="O_Reject"/>
+    <sequenceFlow id="Flow_O_Reject_O_FailFmt" sourceRef="O_Reject" targetRef="O_FailFmt"/>
+    <sequenceFlow id="Flow_O_Normal_O_AIReq" sourceRef="O_Normal" targetRef="O_AIReq"/>
+    <sequenceFlow id="Flow_O_AIReq_O_AIReply" sourceRef="O_AIReq" targetRef="O_AIReply"/>
+    <sequenceFlow id="Flow_O_AIReply_O_Rules" sourceRef="O_AIReply" targetRef="O_Rules"/>
+    <sequenceFlow id="Flow_O_Rules_O_NeedHuman" sourceRef="O_Rules" targetRef="O_NeedHuman"/>
+    <sequenceFlow id="Flow_O_NeedHuman_O_Merge" name="Нет" sourceRef="O_NeedHuman" targetRef="O_Merge"/>
+    <sequenceFlow id="Flow_O_NeedHuman_O_ReviewReq" name="Да" sourceRef="O_NeedHuman" targetRef="O_ReviewReq"/>
+    <sequenceFlow id="Flow_O_ReviewReq_O_ReviewWait" sourceRef="O_ReviewReq" targetRef="O_ReviewWait"/>
+    <sequenceFlow id="Flow_O_ReviewWait_O_Merge" sourceRef="O_ReviewWait" targetRef="O_Merge"/>
+    <sequenceFlow id="Flow_O_Merge_O_Quality" sourceRef="O_Merge" targetRef="O_Quality"/>
+    <sequenceFlow id="Flow_O_Quality_O_QualityGW" sourceRef="O_Quality" targetRef="O_QualityGW"/>
+    <sequenceFlow id="Flow_O_QualityGW_O_QualityBad" name="Нет" sourceRef="O_QualityGW" targetRef="O_QualityBad"/>
+    <sequenceFlow id="Flow_O_QualityGW_O_ERPReq" name="Да" sourceRef="O_QualityGW" targetRef="O_ERPReq"/>
+    <sequenceFlow id="Flow_O_ERPReq_O_ERPWait" sourceRef="O_ERPReq" targetRef="O_ERPWait"/>
+    <sequenceFlow id="Flow_O_ERPWait_O_ErpGW" sourceRef="O_ERPWait" targetRef="O_ErpGW"/>
+    <sequenceFlow id="Flow_O_ErpGW_O_ErpFail" name="Нет" sourceRef="O_ErpGW" targetRef="O_ErpFail"/>
+    <sequenceFlow id="Flow_O_ErpGW_O_PosReq" name="Да" sourceRef="O_ErpGW" targetRef="O_PosReq"/>
+    <sequenceFlow id="Flow_O_PosReq_O_PosWait" sourceRef="O_PosReq" targetRef="O_PosWait"/>
+    <sequenceFlow id="Flow_O_PosWait_O_PilotGW" sourceRef="O_PosWait" targetRef="O_PilotGW"/>
+    <sequenceFlow id="Flow_O_PilotGW_O_Activate" name="Да" sourceRef="O_PilotGW" targetRef="O_Activate"/>
+    <sequenceFlow id="Flow_O_Activate_O_Success" sourceRef="O_Activate" targetRef="O_Success"/>
+    <sequenceFlow id="Flow_O_PilotGW_O_Rollback" name="Нет" sourceRef="O_PilotGW" targetRef="O_Rollback"/>
+    <sequenceFlow id="Flow_O_Rollback_O_FailEnd" sourceRef="O_Rollback" targetRef="O_FailEnd"/>
+    <association id="Assoc_O_Validate_D_Legacy" sourceRef="O_Validate" targetRef="D_Legacy" associationDirection="None"/>
+    <association id="Assoc_O_Rules_D_Candidates" sourceRef="O_Rules" targetRef="D_Candidates" associationDirection="None"/>
+    <association id="Assoc_O_Quality_D_Approved" sourceRef="O_Quality" targetRef="D_Approved" associationDirection="None"/>
+  </process>
+  <process id="Process_AI" name="ИИ сопоставление" isExecutable="false">
+    <startEvent id="AI_Start" name="Запрос на сопоставление">
+      <messageEventDefinition id="MsgDef_AI_Start" messageRef="M_AiReq"/>
+    </startEvent>
+    <serviceTask id="AI_Match" name="Top-k кандидаты, score, GTIN / бренд / объём"/>
+    <sendTask id="AI_Send" name="Вернуть mapping, confidence, признаки"/>
+    <endEvent id="AI_End" name="Результат отправлен"/>
+    <sequenceFlow id="Flow_AI_Start_AI_Match" sourceRef="AI_Start" targetRef="AI_Match"/>
+    <sequenceFlow id="Flow_AI_Match_AI_Send" sourceRef="AI_Match" targetRef="AI_Send"/>
+    <sequenceFlow id="Flow_AI_Send_AI_End" sourceRef="AI_Send" targetRef="AI_End"/>
+  </process>
+  <process id="Process_HQ" name="Ручная проверка" isExecutable="false">
+    <startEvent id="H_Start" name="Очередь сомнительных SKU">
+      <messageEventDefinition id="MsgDef_H_Start" messageRef="M_HumanReq"/>
+    </startEvent>
+    <userTask id="H_Review" name="Сверить GTIN, бренд, объём, цену; выбрать / создать SKU"/>
+    <sendTask id="H_Approve" name="Утвердить исправленный mapping + журнал решения"/>
+    <endEvent id="H_End" name="Решение отправлено"/>
+    <sequenceFlow id="Flow_H_Start_H_Review" sourceRef="H_Start" targetRef="H_Review"/>
+    <sequenceFlow id="Flow_H_Review_H_Approve" sourceRef="H_Review" targetRef="H_Approve"/>
+    <sequenceFlow id="Flow_H_Approve_H_End" sourceRef="H_Approve" targetRef="H_End"/>
+  </process>
+  <process id="Process_ERP" name="ERP загрузка" isExecutable="false">
+    <dataObject id="Obj_D_Catalog" name="Эталонный каталог ERP / MDM"/>
+    <dataObjectReference id="D_Catalog" name="Эталонный каталог ERP / MDM" dataObjectRef="Obj_D_Catalog"/>
+    <startEvent id="E_Start" name="Утверждённый mapping">
+      <messageEventDefinition id="MsgDef_E_Start" messageRef="M_ErpReq"/>
+    </startEvent>
+    <serviceTask id="E_Validate" name="Сверить ключи, цены, версии и ограничения"/>
+    <exclusiveGateway id="E_Gateway" name="Пакет валиден?" gatewayDirection="Diverging"/>
+    <serviceTask id="E_Import" name="Идемпотентно записать версию в ERP / MDM"/>
+    <sendTask id="E_OK" name="Ответ: success, versionId, checksum"/>
+    <endEvent id="E_End" name="Версия опубликована"/>
+    <sendTask id="E_NOK" name="Ответ: rejected с ошибками"/>
+    <endEvent id="E_Fail" name="Пакет отклонён"/>
+    <sequenceFlow id="Flow_E_Start_E_Validate" sourceRef="E_Start" targetRef="E_Validate"/>
+    <sequenceFlow id="Flow_E_Validate_E_Gateway" sourceRef="E_Validate" targetRef="E_Gateway"/>
+    <sequenceFlow id="Flow_E_Gateway_E_Import" name="Да" sourceRef="E_Gateway" targetRef="E_Import"/>
+    <sequenceFlow id="Flow_E_Import_E_OK" sourceRef="E_Import" targetRef="E_OK"/>
+    <sequenceFlow id="Flow_E_OK_E_End" sourceRef="E_OK" targetRef="E_End"/>
+    <sequenceFlow id="Flow_E_Gateway_E_NOK" name="Нет" sourceRef="E_Gateway" targetRef="E_NOK"/>
+    <sequenceFlow id="Flow_E_NOK_E_Fail" sourceRef="E_NOK" targetRef="E_Fail"/>
+    <association id="Assoc_E_Validate_D_Catalog" sourceRef="E_Validate" targetRef="D_Catalog" associationDirection="None"/>
+  </process>
+  <bpmndi:BPMNDiagram id="Diagram_Onboarding_TO_BE" name="VitaStore TO-BE — подключение магазина">
+    <bpmndi:BPMNPlane id="Plane_Onboarding_TO_BE" bpmnElement="Collaboration_Onboarding">
+      <bpmndi:BPMNShape id="Shape_Participant_Store" bpmnElement="Participant_Store" isHorizontal="true">
+        <dc:Bounds x="55" y="70" width="3770" height="240"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Participant_Orch" bpmnElement="Participant_Orch" isHorizontal="true">
+        <dc:Bounds x="55" y="327" width="3770" height="324"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Participant_AI" bpmnElement="Participant_AI" isHorizontal="true">
+        <dc:Bounds x="55" y="668" width="3770" height="160"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Participant_HQ" bpmnElement="Participant_HQ" isHorizontal="true">
+        <dc:Bounds x="55" y="845" width="3770" height="160"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Participant_ERP" bpmnElement="Participant_ERP" isHorizontal="true">
+        <dc:Bounds x="55" y="1022" width="3770" height="237"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Start" bpmnElement="S_Start">
+        <dc:Bounds x="160" y="119" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Export" bpmnElement="S_Export">
+        <dc:Bounds x="255" y="102" width="186" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Send" bpmnElement="S_Send">
+        <dc:Bounds x="479" y="102" width="187" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_End" bpmnElement="S_End">
+        <dc:Bounds x="714" y="119" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Restart" bpmnElement="S_Restart">
+        <dc:Bounds x="160" y="230" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Fix" bpmnElement="S_Fix">
+        <dc:Bounds x="255" y="212" width="186" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Resend" bpmnElement="S_Resend">
+        <dc:Bounds x="479" y="212" width="187" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_End2" bpmnElement="S_End2">
+        <dc:Bounds x="714" y="230" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_TestStart" bpmnElement="S_TestStart">
+        <dc:Bounds x="3030" y="119" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Test" bpmnElement="S_Test">
+        <dc:Bounds x="3130" y="102" width="194" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_Result" bpmnElement="S_Result">
+        <dc:Bounds x="3380" y="102" width="186" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_S_End3" bpmnElement="S_End3">
+        <dc:Bounds x="3632" y="119" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Start" bpmnElement="O_Start">
+        <dc:Bounds x="520" y="394" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Validate" bpmnElement="O_Validate">
+        <dc:Bounds x="614" y="377" width="186" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_GWformat" bpmnElement="O_GWformat">
+        <dc:Bounds x="839" y="393" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Reject" bpmnElement="O_Reject">
+        <dc:Bounds x="934" y="535" width="175" height="66"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_FailFmt" bpmnElement="O_FailFmt">
+        <dc:Bounds x="1160" y="547" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Normal" bpmnElement="O_Normal">
+        <dc:Bounds x="949" y="377" width="174" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_AIReq" bpmnElement="O_AIReq">
+        <dc:Bounds x="1151" y="377" width="174" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_AIReply" bpmnElement="O_AIReply">
+        <dc:Bounds x="1367" y="394" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Rules" bpmnElement="O_Rules">
+        <dc:Bounds x="1455" y="377" width="155" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_NeedHuman" bpmnElement="O_NeedHuman">
+        <dc:Bounds x="1648" y="393" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_ReviewReq" bpmnElement="O_ReviewReq">
+        <dc:Bounds x="1762" y="535" width="166" height="66"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_ReviewWait" bpmnElement="O_ReviewWait">
+        <dc:Bounds x="1982" y="549" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Merge" bpmnElement="O_Merge">
+        <dc:Bounds x="2116" y="393" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Quality" bpmnElement="O_Quality">
+        <dc:Bounds x="2210" y="377" width="173" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_QualityGW" bpmnElement="O_QualityGW">
+        <dc:Bounds x="2415" y="393" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_QualityBad" bpmnElement="O_QualityBad">
+        <dc:Bounds x="2420" y="552" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_ERPReq" bpmnElement="O_ERPReq">
+        <dc:Bounds x="2510" y="377" width="178" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_ERPWait" bpmnElement="O_ERPWait">
+        <dc:Bounds x="2720" y="394" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_ErpGW" bpmnElement="O_ErpGW">
+        <dc:Bounds x="2813" y="393" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_ErpFail" bpmnElement="O_ErpFail">
+        <dc:Bounds x="2820" y="552" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_PosReq" bpmnElement="O_PosReq">
+        <dc:Bounds x="2893" y="377" width="165" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_PosWait" bpmnElement="O_PosWait">
+        <dc:Bounds x="3098" y="394" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_PilotGW" bpmnElement="O_PilotGW">
+        <dc:Bounds x="3212" y="393" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Activate" bpmnElement="O_Activate">
+        <dc:Bounds x="3292" y="377" width="178" height="76"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Success" bpmnElement="O_Success">
+        <dc:Bounds x="3650" y="394" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_Rollback" bpmnElement="O_Rollback">
+        <dc:Bounds x="3318" y="535" width="169" height="66"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_O_FailEnd" bpmnElement="O_FailEnd">
+        <dc:Bounds x="3560" y="547" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_AI_Start" bpmnElement="AI_Start">
+        <dc:Bounds x="1142" y="721" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_AI_Match" bpmnElement="AI_Match">
+        <dc:Bounds x="1272" y="702" width="246" height="81"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_AI_Send" bpmnElement="AI_Send">
+        <dc:Bounds x="1564" y="702" width="223" height="81"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_AI_End" bpmnElement="AI_End">
+        <dc:Bounds x="1850" y="721" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_H_Start" bpmnElement="H_Start">
+        <dc:Bounds x="1759" y="899" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_H_Review" bpmnElement="H_Review">
+        <dc:Bounds x="1881" y="876" width="265" height="90"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_H_Approve" bpmnElement="H_Approve">
+        <dc:Bounds x="2210" y="876" width="252" height="90"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_H_End" bpmnElement="H_End">
+        <dc:Bounds x="2510" y="899" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_Start" bpmnElement="E_Start">
+        <dc:Bounds x="2494" y="1073" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_Validate" bpmnElement="E_Validate">
+        <dc:Bounds x="2590" y="1056" width="190" height="78"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_Gateway" bpmnElement="E_Gateway">
+        <dc:Bounds x="2820" y="1069" width="52" height="52"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_Import" bpmnElement="E_Import">
+        <dc:Bounds x="2922" y="1056" width="190" height="78"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_OK" bpmnElement="E_OK">
+        <dc:Bounds x="3180" y="1056" width="177" height="78"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_End" bpmnElement="E_End">
+        <dc:Bounds x="3620" y="1073" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_NOK" bpmnElement="E_NOK">
+        <dc:Bounds x="2950" y="1173" width="177" height="64"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_E_Fail" bpmnElement="E_Fail">
+        <dc:Bounds x="3410" y="1180" width="42" height="42"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_D_Legacy" bpmnElement="D_Legacy">
+        <dc:Bounds x="690" y="474" width="42" height="51"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="678" y="528" width="145" height="35"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_D_Candidates" bpmnElement="D_Candidates">
+        <dc:Bounds x="1502" y="479" width="42" height="51"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1490" y="533" width="145" height="35"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_D_Approved" bpmnElement="D_Approved">
+        <dc:Bounds x="2250" y="481" width="42" height="51"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="2238" y="535" width="145" height="35"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_D_Catalog" bpmnElement="D_Catalog">
+        <dc:Bounds x="2270" y="1080" width="42" height="51"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="2258" y="1134" width="145" height="35"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Start_S_Export" bpmnElement="Flow_S_Start_S_Export">
+        <di:waypoint x="202" y="140.0"/>
+        <di:waypoint x="255" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Export_S_Send" bpmnElement="Flow_S_Export_S_Send">
+        <di:waypoint x="441" y="140.0"/>
+        <di:waypoint x="479" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Send_S_End" bpmnElement="Flow_S_Send_S_End">
+        <di:waypoint x="666" y="140.0"/>
+        <di:waypoint x="714" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Restart_S_Fix" bpmnElement="Flow_S_Restart_S_Fix">
+        <di:waypoint x="202" y="251.0"/>
+        <di:waypoint x="255" y="250.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Fix_S_Resend" bpmnElement="Flow_S_Fix_S_Resend">
+        <di:waypoint x="441" y="250.0"/>
+        <di:waypoint x="479" y="250.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Resend_S_End2" bpmnElement="Flow_S_Resend_S_End2">
+        <di:waypoint x="666" y="250.0"/>
+        <di:waypoint x="714" y="251.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_TestStart_S_Test" bpmnElement="Flow_S_TestStart_S_Test">
+        <di:waypoint x="3072" y="140.0"/>
+        <di:waypoint x="3130" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Test_S_Result" bpmnElement="Flow_S_Test_S_Result">
+        <di:waypoint x="3324" y="140.0"/>
+        <di:waypoint x="3380" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_S_Result_S_End3" bpmnElement="Flow_S_Result_S_End3">
+        <di:waypoint x="3566" y="140.0"/>
+        <di:waypoint x="3632" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Start_O_Validate" bpmnElement="Flow_O_Start_O_Validate">
+        <di:waypoint x="562" y="415.0"/>
+        <di:waypoint x="614" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Validate_O_GWformat" bpmnElement="Flow_O_Validate_O_GWformat">
+        <di:waypoint x="800" y="415.0"/>
+        <di:waypoint x="839" y="419.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_GWformat_O_Normal" bpmnElement="Flow_O_GWformat_O_Normal">
+        <di:waypoint x="891" y="419.0"/>
+        <di:waypoint x="949" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_GWformat_O_Reject" bpmnElement="Flow_O_GWformat_O_Reject">
+        <di:waypoint x="865" y="445"/>
+        <di:waypoint x="865" y="568"/>
+        <di:waypoint x="934" y="568"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Reject_O_FailFmt" bpmnElement="Flow_O_Reject_O_FailFmt">
+        <di:waypoint x="1109" y="568.0"/>
+        <di:waypoint x="1160" y="568.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Normal_O_AIReq" bpmnElement="Flow_O_Normal_O_AIReq">
+        <di:waypoint x="1123" y="415.0"/>
+        <di:waypoint x="1151" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_AIReq_O_AIReply" bpmnElement="Flow_O_AIReq_O_AIReply">
+        <di:waypoint x="1325" y="415.0"/>
+        <di:waypoint x="1367" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_AIReply_O_Rules" bpmnElement="Flow_O_AIReply_O_Rules">
+        <di:waypoint x="1409" y="415.0"/>
+        <di:waypoint x="1455" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Rules_O_NeedHuman" bpmnElement="Flow_O_Rules_O_NeedHuman">
+        <di:waypoint x="1610" y="415.0"/>
+        <di:waypoint x="1648" y="419.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_NeedHuman_O_Merge" bpmnElement="Flow_O_NeedHuman_O_Merge">
+        <di:waypoint x="1700" y="419.0"/>
+        <di:waypoint x="2116" y="419.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_NeedHuman_O_ReviewReq" bpmnElement="Flow_O_NeedHuman_O_ReviewReq">
+        <di:waypoint x="1674" y="445"/>
+        <di:waypoint x="1674" y="568"/>
+        <di:waypoint x="1762" y="568"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_ReviewReq_O_ReviewWait" bpmnElement="Flow_O_ReviewReq_O_ReviewWait">
+        <di:waypoint x="1928" y="568.0"/>
+        <di:waypoint x="1982" y="570.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_ReviewWait_O_Merge" bpmnElement="Flow_O_ReviewWait_O_Merge">
+        <di:waypoint x="2024" y="570"/>
+        <di:waypoint x="2142" y="570"/>
+        <di:waypoint x="2142" y="445"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Merge_O_Quality" bpmnElement="Flow_O_Merge_O_Quality">
+        <di:waypoint x="2168" y="419.0"/>
+        <di:waypoint x="2210" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Quality_O_QualityGW" bpmnElement="Flow_O_Quality_O_QualityGW">
+        <di:waypoint x="2383" y="415.0"/>
+        <di:waypoint x="2415" y="419.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_QualityGW_O_QualityBad" bpmnElement="Flow_O_QualityGW_O_QualityBad">
+        <di:waypoint x="2441" y="445"/>
+        <di:waypoint x="2441" y="552"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_QualityGW_O_ERPReq" bpmnElement="Flow_O_QualityGW_O_ERPReq">
+        <di:waypoint x="2467" y="419.0"/>
+        <di:waypoint x="2510" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_ERPReq_O_ERPWait" bpmnElement="Flow_O_ERPReq_O_ERPWait">
+        <di:waypoint x="2688" y="415.0"/>
+        <di:waypoint x="2720" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_ERPWait_O_ErpGW" bpmnElement="Flow_O_ERPWait_O_ErpGW">
+        <di:waypoint x="2762" y="415.0"/>
+        <di:waypoint x="2813" y="419.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_ErpGW_O_ErpFail" bpmnElement="Flow_O_ErpGW_O_ErpFail">
+        <di:waypoint x="2839" y="445"/>
+        <di:waypoint x="2839" y="552"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_ErpGW_O_PosReq" bpmnElement="Flow_O_ErpGW_O_PosReq">
+        <di:waypoint x="2865" y="419.0"/>
+        <di:waypoint x="2893" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_PosReq_O_PosWait" bpmnElement="Flow_O_PosReq_O_PosWait">
+        <di:waypoint x="3058" y="415.0"/>
+        <di:waypoint x="3098" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_PosWait_O_PilotGW" bpmnElement="Flow_O_PosWait_O_PilotGW">
+        <di:waypoint x="3140" y="415.0"/>
+        <di:waypoint x="3212" y="419.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_PilotGW_O_Activate" bpmnElement="Flow_O_PilotGW_O_Activate">
+        <di:waypoint x="3264" y="419.0"/>
+        <di:waypoint x="3292" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Activate_O_Success" bpmnElement="Flow_O_Activate_O_Success">
+        <di:waypoint x="3470" y="415.0"/>
+        <di:waypoint x="3650" y="415.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_PilotGW_O_Rollback" bpmnElement="Flow_O_PilotGW_O_Rollback">
+        <di:waypoint x="3238" y="445"/>
+        <di:waypoint x="3238" y="568"/>
+        <di:waypoint x="3318" y="568"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_O_Rollback_O_FailEnd" bpmnElement="Flow_O_Rollback_O_FailEnd">
+        <di:waypoint x="3487" y="568.0"/>
+        <di:waypoint x="3560" y="568.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_AI_Start_AI_Match" bpmnElement="Flow_AI_Start_AI_Match">
+        <di:waypoint x="1184" y="742.0"/>
+        <di:waypoint x="1272" y="742.5"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_AI_Match_AI_Send" bpmnElement="Flow_AI_Match_AI_Send">
+        <di:waypoint x="1518" y="742.5"/>
+        <di:waypoint x="1564" y="742.5"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_AI_Send_AI_End" bpmnElement="Flow_AI_Send_AI_End">
+        <di:waypoint x="1787" y="742.5"/>
+        <di:waypoint x="1850" y="742.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_H_Start_H_Review" bpmnElement="Flow_H_Start_H_Review">
+        <di:waypoint x="1801" y="920.0"/>
+        <di:waypoint x="1881" y="921.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_H_Review_H_Approve" bpmnElement="Flow_H_Review_H_Approve">
+        <di:waypoint x="2146" y="921.0"/>
+        <di:waypoint x="2210" y="921.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_H_Approve_H_End" bpmnElement="Flow_H_Approve_H_End">
+        <di:waypoint x="2462" y="921.0"/>
+        <di:waypoint x="2510" y="920.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_Start_E_Validate" bpmnElement="Flow_E_Start_E_Validate">
+        <di:waypoint x="2536" y="1094.0"/>
+        <di:waypoint x="2590" y="1095.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_Validate_E_Gateway" bpmnElement="Flow_E_Validate_E_Gateway">
+        <di:waypoint x="2780" y="1095.0"/>
+        <di:waypoint x="2820" y="1095.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_Gateway_E_Import" bpmnElement="Flow_E_Gateway_E_Import">
+        <di:waypoint x="2872" y="1095.0"/>
+        <di:waypoint x="2922" y="1095.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_Import_E_OK" bpmnElement="Flow_E_Import_E_OK">
+        <di:waypoint x="3112" y="1095.0"/>
+        <di:waypoint x="3180" y="1095.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_OK_E_End" bpmnElement="Flow_E_OK_E_End">
+        <di:waypoint x="3357" y="1095.0"/>
+        <di:waypoint x="3620" y="1094.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_Gateway_E_NOK" bpmnElement="Flow_E_Gateway_E_NOK">
+        <di:waypoint x="2846" y="1121"/>
+        <di:waypoint x="2846" y="1205"/>
+        <di:waypoint x="2950" y="1205"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_E_NOK_E_Fail" bpmnElement="Flow_E_NOK_E_Fail">
+        <di:waypoint x="3127" y="1205.0"/>
+        <di:waypoint x="3410" y="1201.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_File" bpmnElement="Msg_File">
+        <di:waypoint x="572" y="178"/>
+        <di:waypoint x="572" y="330"/>
+        <di:waypoint x="541" y="330"/>
+        <di:waypoint x="541" y="394"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_Resent" bpmnElement="Msg_Resent">
+        <di:waypoint x="610" y="288"/>
+        <di:waypoint x="610" y="336"/>
+        <di:waypoint x="541" y="336"/>
+        <di:waypoint x="541" y="394"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_Correct" bpmnElement="Msg_Correct">
+        <di:waypoint x="934" y="568"/>
+        <di:waypoint x="820" y="568"/>
+        <di:waypoint x="820" y="251"/>
+        <di:waypoint x="202" y="251"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_AiRequest" bpmnElement="Msg_AiRequest">
+        <di:waypoint x="1238" y="453"/>
+        <di:waypoint x="1238" y="676"/>
+        <di:waypoint x="1163" y="676"/>
+        <di:waypoint x="1163" y="721"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_AiAnswer" bpmnElement="Msg_AiAnswer">
+        <di:waypoint x="1675" y="702"/>
+        <di:waypoint x="1675" y="663"/>
+        <di:waypoint x="1388" y="663"/>
+        <di:waypoint x="1388" y="436"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_ReviewTask" bpmnElement="Msg_ReviewTask">
+        <di:waypoint x="1845" y="601"/>
+        <di:waypoint x="1845" y="831"/>
+        <di:waypoint x="1780" y="831"/>
+        <di:waypoint x="1780" y="899"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_ReviewAnswer" bpmnElement="Msg_ReviewAnswer">
+        <di:waypoint x="2336" y="876"/>
+        <di:waypoint x="2336" y="836"/>
+        <di:waypoint x="2003" y="836"/>
+        <di:waypoint x="2003" y="591"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_ERP" bpmnElement="Msg_ERP">
+        <di:waypoint x="2599" y="453"/>
+        <di:waypoint x="2599" y="995"/>
+        <di:waypoint x="2515" y="995"/>
+        <di:waypoint x="2515" y="1073"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_ERP_OK" bpmnElement="Msg_ERP_OK">
+        <di:waypoint x="3269" y="1056"/>
+        <di:waypoint x="3269" y="1016"/>
+        <di:waypoint x="2741" y="1016"/>
+        <di:waypoint x="2741" y="436"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_ERP_NOK" bpmnElement="Msg_ERP_NOK">
+        <di:waypoint x="3038" y="1173"/>
+        <di:waypoint x="3038" y="1006"/>
+        <di:waypoint x="2750" y="1006"/>
+        <di:waypoint x="2750" y="436"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_ToStore" bpmnElement="Msg_ToStore">
+        <di:waypoint x="2975" y="377"/>
+        <di:waypoint x="2975" y="299"/>
+        <di:waypoint x="3051" y="299"/>
+        <di:waypoint x="3051" y="161"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Msg_StoreResult" bpmnElement="Msg_StoreResult">
+        <di:waypoint x="3473" y="178"/>
+        <di:waypoint x="3473" y="313"/>
+        <di:waypoint x="3119" y="313"/>
+        <di:waypoint x="3119" y="394"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Assoc_O_Validate_D_Legacy" bpmnElement="Assoc_O_Validate_D_Legacy">
+        <di:waypoint x="707.0" y="453"/>
+        <di:waypoint x="711" y="474"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Assoc_O_Rules_D_Candidates" bpmnElement="Assoc_O_Rules_D_Candidates">
+        <di:waypoint x="1532.5" y="453"/>
+        <di:waypoint x="1523" y="479"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Assoc_O_Quality_D_Approved" bpmnElement="Assoc_O_Quality_D_Approved">
+        <di:waypoint x="2296.5" y="453"/>
+        <di:waypoint x="2271" y="481"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Assoc_E_Validate_D_Catalog" bpmnElement="Assoc_E_Validate_D_Catalog">
+        <di:waypoint x="2685.0" y="1134"/>
+        <di:waypoint x="2291" y="1080"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
